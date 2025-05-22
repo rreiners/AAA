@@ -1,0 +1,22 @@
+plotting:
+  width: 10
+  height: 4
+
+default:
+  font_family: "JetBrainsMono Nerd Font"
+  font_size: 10
+
+themes:
+  light:
+    background: "#f8f9fa"
+    plot_color: "tab:blue"
+    second_plot_color: "#FFAA33"
+    contour_color: "black"
+    plt_style: "default"
+
+  dark:
+    background: "#1f2430" #"#212121"
+    plot_color: "#80CBC4"
+    second_plot_color: "#FFAA33"
+    contour_color: "#F8F9FA"
+    plt_style: "dark_background"

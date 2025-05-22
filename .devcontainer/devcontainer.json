@@ -1,0 +1,51 @@
+{
+    "name": "Data Science Env",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "installZsh": "true",
+            "username": "jovyan",
+            "userUid": "1000",
+            "userGid": "1000",
+            "upgradePackages": "true"
+        }
+    },
+    "overrideCommand": false,
+    "forwardPorts": [
+        8888
+    ],
+    "portsAttributes": {
+        "8888": {
+            "label": "Jupyter",
+            "requireLocalPort": true,
+            "onAutoForward": "ignore"
+        }
+    },
+    "containerEnv": {
+      "SHELL": "/usr/bin/fish"
+    },
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "terminal.integrated.defaultProfile.linux": "fish",
+                "terminal.integrated.profiles.linux": {
+                    "fish": {
+                        "path": "/usr/bin/fish"
+                    }
+                }
+            },
+            "extensions": [
+                "ms-python.python",
+                "ms-toolsai.jupyter",
+                "rufflang.ruff-vscode",
+                "ms-azuretools.vscode-docker",
+                "esbenp.prettier-vscode",
+                "ms-toolsai.datawrangler"
+            ]
+        }
+    }
+}
