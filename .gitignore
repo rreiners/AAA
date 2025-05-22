@@ -1,0 +1,22 @@
+# Python compiled files
+*.py[cod]
+*$py.class
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Data and results
+/data/results/*
