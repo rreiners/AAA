@@ -15,7 +15,8 @@ class StyleManager:
         if config_path is None:
             config_path = self.project_root / "config" / "styling.yaml"
 
-        self.config = self.load_config(config_path)
+        self.config_path = config_path
+        self.config = self.load_config()
         self.apply_style()
         self.configure_jupyter_plotting()
 
@@ -86,8 +87,8 @@ class StyleManager:
                 )
                 return style
 
-    def load_config(self, config_path, monitor="MacBook"):
-        with open(config_path, "r") as file:
+    def load_config(self):
+        with open(self.config_path, "r") as file:
             config = yaml.safe_load(file)
 
         styling = self.check_macos_theme()

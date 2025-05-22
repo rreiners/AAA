@@ -20,3 +20,5 @@ env/
 
 # Data and results
 /data/results/*
+*.parquet
+*.csv

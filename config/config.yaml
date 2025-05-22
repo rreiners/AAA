@@ -1,0 +1,5 @@
+CHICAGO_TAXI:
+  DEFAULT_DOMAIN: "data.cityofchicago.org"
+  DEFAULT_DATASET_ID: "ajtu-isnz"
+  APP_TOKEN: CIqimIZW2iMeMjo0s5xUCGTZd
+  SECRET_TOKEN: eAGKnoziTGutPmwIoZMInc9rj1s5W7nuL6AA

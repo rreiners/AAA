@@ -1,270 +1,277 @@
-"""
-Chicago Taxi Data API Utilities
-Efficient data collection from Chicago Data Portal using SODA API
-"""
-
+# taxi.py
 import pandas as pd
-import requests
-import time
-from datetime import datetime, timedelta
-from typing import Optional, Dict, List
-
+from sodapy import Socrata
+from typing import List, Optional, Dict, Any
 from pathlib import Path
-
+from tqdm import tqdm
 
 class ChicagoTaxiAPI:
     """
-    Chicago Taxi Data API client with advanced filtering and batch processing
+    A client for fetching data from the Chicago Taxi Socrata dataset using sodapy.
+    Dataset: https://data.cityofchicago.org/resource/ajtu-isnz.json
     """
+    DEFAULT_DOMAIN = "data.cityofchicago.org"
+    DEFAULT_DATASET_ID = "ajtu-isnz"
 
-    def __init__(
-        self, base_url="https://data.cityofchicago.org/resource/ajtu-isnz.json"
-    ):
-        self.base_url = base_url
-        self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "Chicago-Taxi-Analysis/1.0"})
-
-    def get_metadata(self) -> Optional[Dict]:
-        """Get dataset metadata"""
-        metadata_url = "https://data.cityofchicago.org/api/views/ajtu-isnz.json"
-        try:
-            response = self.session.get(metadata_url, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            print(f"❌ Failed to fetch metadata: {e}")
-            return None
-
-    def build_query_params(
-        self,
-        limit: int = 1000,
-        offset: int = 0,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        where_clause: Optional[str] = None,
-        select_columns: Optional[List[str]] = None,
-        order_by: str = "trip_start_timestamp DESC",
-    ) -> Dict:
+    def __init__(self,
+                 app_token: Optional[str] = None,
+                 domain: str = DEFAULT_DOMAIN,
+                 dataset_id: str = DEFAULT_DATASET_ID):
         """
-        Build query parameters for the API call
+        Initializes the ChicagoTaxiAPI client.
 
         Args:
-            limit: Number of records (max 50,000)
-            offset: Starting record for pagination
-            start_date: Start date filter (YYYY-MM-DD)
-            end_date: End date filter (YYYY-MM-DD)
-            where_clause: Custom SQL-like where clause
-            select_columns: List of columns to select
-            order_by: Sort order
+            app_token: Your Socrata App Token (optional, but recommended for higher rate limits).
+            domain: The Socrata domain.
+            dataset_id: The Socrata dataset identifier.
         """
-        params = {
-            "$limit": min(limit, 50000),
-            "$offset": offset,
-            "$order": order_by,
-        }
+        self.domain = domain
+        self.dataset_id = dataset_id
+        self.client = Socrata(self.domain, app_token, timeout=60) # Increased timeout
+        self._socrata_metadata: Optional[Dict] = None # Cache for Socrata metadata
 
-        # Build where clause
-        where_conditions = []
-
-        if start_date and end_date:
-            where_conditions.append(
-                f"trip_start_timestamp between '{start_date}T00:00:00' and '{end_date}T23:59:59'"
-            )
-        elif start_date:
-            where_conditions.append(
-                f"trip_start_timestamp >= '{start_date}T00:00:00'"
-            )
-        elif end_date:
-            where_conditions.append(
-                f"trip_start_timestamp <= '{end_date}T23:59:59'"
-            )
-
-        if where_clause:
-            where_conditions.append(where_clause)
-
-        if where_conditions:
-            params["$where"] = " AND ".join(where_conditions)
-
-        if select_columns:
-            params["$select"] = ",".join(select_columns)
-
-        return params
-
-    def fetch_data(self, **kwargs) -> Optional[pd.DataFrame]:
+    def _get_socrata_metadata(self, refresh: bool = False) -> Dict:
         """
-        Fetch data with specified parameters
+        Fetches and caches the Socrata metadata for the dataset.
+        This metadata includes column names, Socrata data types, etc.
         """
-        params = self.build_query_params(**kwargs)
+        if self._socrata_metadata is None or refresh:
+            try:
+                # print(f"Fetching Socrata metadata for dataset {self.dataset_id}...")
+                self._socrata_metadata = self.client.get_metadata(self.dataset_id)
+            except Exception as e:
+                print(f"❌ Failed to fetch Socrata metadata: {e}")
+                self._socrata_metadata = {} # Avoid refetching on every call if failed
+        return self._socrata_metadata or {}
 
-        try:
-            response = self.session.get(
-                self.base_url, params=params, timeout=60
-            )
-            response.raise_for_status()
+    def get_column_socrata_types(self) -> Dict[str, str]:
+        """
+        Returns a mapping of fieldName to Socrata dataTypeName.
+        """
+        metadata = self._get_socrata_metadata()
+        type_map = {}
+        if metadata and "columns" in metadata:
+            for col_info in metadata["columns"]:
+                if "fieldName" in col_info and "dataTypeName" in col_info:
+                    type_map[col_info["fieldName"]] = col_info["dataTypeName"]
+        return type_map
 
-            data = response.json()
-            if not data:
-                return pd.DataFrame()
-
-            df = pd.DataFrame(data)
+    def convert_df_types(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Converts DataFrame columns to appropriate types based on Socrata metadata.
+        """
+        if df.empty:
             return df
 
-        except requests.exceptions.RequestException as e:
-            print(f"❌ API request failed: {e}")
-            return None
-        except Exception as e:
-            print(f"❌ Error processing response: {e}")
-            return None
+        socrata_type_map = self.get_column_socrata_types()
+        if not socrata_type_map:
+            print("⚠️ Could not retrieve Socrata type information. Skipping detailed type conversion.")
+            return df
 
-    def fetch_in_batches(
-        self,
-        total_records: int = 10000,
-        batch_size: int = 50000,
-        delay_seconds: float = 1.0,
-        save_batches: bool = True,
-        output_dir: Optional[Path] = None,
-        **query_kwargs,
-    ) -> Optional[pd.DataFrame]:
+        for field_name, socrata_type in socrata_type_map.items():
+            if field_name in df.columns:
+                try:
+                    current_col = df[field_name]
+            
+                    if current_col.isnull().all() and socrata_type not in \
+                       {"text", "checkbox", "url", "photo", "document", "html", "email", "phone", "point", "location"}: 
+                        if socrata_type in {"calendar_date", "fixed_timestamp", "floating_timestamp"}:
+                             df[field_name] = pd.to_datetime(current_col, errors='coerce')
+                        continue
+
+                    if socrata_type in {"number", "money"}:
+                        df[field_name] = pd.to_numeric(current_col, errors='coerce')
+                    elif socrata_type in {"calendar_date", "fixed_timestamp", "floating_timestamp"}:
+                        df[field_name] = pd.to_datetime(current_col, errors='coerce')
+                    elif socrata_type == "checkbox": # Socrata boolean type
+                        # Convert common string representations of boolean beforeastype
+                        if current_col.dtype == 'object':
+                            # sodapy might return 'true'/'false' strings or actual booleans
+                            map_to_bool = {'true': True, 'false': False, True: True, False: False}
+                            # Only map if values are in the map, otherwise keep as is for astype to handle Nones
+                            df[field_name] = current_col.map(lambda x: map_to_bool.get(str(x).lower() if pd.notnull(x) else x, pd.NA) if pd.notnull(x) else pd.NA)
+                        df[field_name] = current_col.astype("boolean") # Pandas nullable boolean
+                    elif socrata_type in {"text", "url", "photo", "document", "html", "email", "phone"}:
+                        df[field_name] = current_col.astype("string") # Pandas nullable string
+                    # 'point', 'location' etc. are often fine as objects or require specific geo-parsing
+
+                except Exception as e:
+                    print(f"⚠️ Failed to convert column '{field_name}' (Socrata type: {socrata_type}): {e}")
+        return df
+
+    def fetch_data(self,
+                   select: Optional[str] = None,
+                   where: Optional[str] = None,
+                   order: Optional[str] = None,
+                   limit: Optional[int] = 1000, # Default limit for a single call
+                   offset: Optional[int] = None,
+                   q: Optional[str] = None, # For full-text search
+                   convert_types: bool = True,
+                   **sodaql_params: Any  # For other SODAQL $parameters like $group
+                   ) -> Optional[pd.DataFrame]:
         """
-        Fetch large dataset in batches
+        Fetches data from the Socrata dataset.
+
+        Args:
+            select: SOQL SELECT clause (e.g., "col1, col2").
+            where: SOQL WHERE clause (e.g., "col1 > 10 AND col2 = 'text'").
+            order: SOQL ORDER BY clause (e.g., "col1 DESC").
+            limit: Maximum number of records to return.
+            offset: Offset for records.
+            q: Full-text search query.
+            convert_types: Whether to attempt automatic type conversion based on Socrata metadata.
+            **sodaql_params: Additional SODAQL parameters (e.g., group="column_name").
+
+        Returns:
+            A pandas DataFrame with the fetched data, or None if an error occurs.
         """
-        if output_dir is None:
-            output_dir = Path("data/processed")
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        all_batches = []
-        records_fetched = 0
-        batch_num = 1
-
-        print(f"📦 Fetching {total_records} records in batches of {batch_size}")
-
-        while records_fetched < total_records:
-            remaining = total_records - records_fetched
-            current_limit = min(batch_size, remaining)
-
-            print(
-                f"🔄 Batch {batch_num}: fetching {current_limit} records (offset: {records_fetched})"
-            )
-
-            batch_df = self.fetch_data(
-                limit=current_limit, offset=records_fetched, **query_kwargs
-            )
-
-            if batch_df is None or len(batch_df) == 0:
-                print(f"⚠️  No more data available at offset {records_fetched}")
-                break
-
-            all_batches.append(batch_df)
-            records_fetched += len(batch_df)
-
-            if save_batches:
-                batch_file = output_dir / f"taxi_batch_{batch_num:03d}.parquet"
-                batch_df.to_parquet(batch_file, index=False)
-                print(f"💾 Saved batch to {batch_file}")
-
-            progress = records_fetched / total_records * 100
-            print(
-                f"📊 Progress: {records_fetched:,}/{total_records:,} ({progress:.1f}%)"
-            )
-
-            batch_num += 1
-            time.sleep(delay_seconds)  # Be respectful to the API
-
-        if all_batches:
-            print("🔗 Combining batches...")
-            combined_df = pd.concat(all_batches, ignore_index=True)
-
-            # Save combined dataset
-            combined_file = output_dir / "taxi_data_combined.parquet"
-            combined_df.to_parquet(combined_file, index=False)
-            print(
-                f"✅ Saved combined dataset: {len(combined_df):,} records to {combined_file}"
-            )
-
-            return combined_df
-
-        return None
-
-    def get_sample_for_month(
-        self, year: int = 2024, month: int = 1, sample_size: int = 5000
-    ) -> Optional[pd.DataFrame]:
-        """Get a sample of data for a specific month"""
-        start_date = f"{year}-{month:02d}-01"
-
-        # Calculate end date
-        if month == 12:
-            end_date = f"{year}-12-31"
-        else:
-            next_month = datetime(year, month + 1, 1)
-            end_date = (next_month - timedelta(days=1)).strftime("%Y-%m-%d")
-
-        return self.fetch_data(
-            limit=sample_size, start_date=start_date, end_date=end_date
-        )
-
-    def explore_data_distribution(self) -> Dict:
-        """
-        Explore the temporal and spatial distribution of the data
-        """
-        print("🔍 EXPLORING DATA DISTRIBUTION")
-        print("=" * 40)
-
-        # Get recent sample
-        recent_sample = self.fetch_data(limit=1000)
-        if recent_sample is None or len(recent_sample) == 0:
-            return {}
-
-        analysis = {}
-
-        # Convert timestamp
-        if "trip_start_timestamp" in recent_sample.columns:
-            recent_sample["trip_start_timestamp"] = pd.to_datetime(
-                recent_sample["trip_start_timestamp"]
-            )
-
-            # Temporal analysis
-            analysis["temporal"] = {
-                "earliest": recent_sample["trip_start_timestamp"].min(),
-                "latest": recent_sample["trip_start_timestamp"].max(),
-                "date_range_days": (
-                    recent_sample["trip_start_timestamp"].max()
-                    - recent_sample["trip_start_timestamp"].min()
-                ).days,
-            }
-
-            print(
-                f"📅 Date range: {analysis['temporal']['earliest']} to {analysis['temporal']['latest']}"
-            )
-            print(f"📅 Span: {analysis['temporal']['date_range_days']} days")
-
-        # Column analysis
-        analysis["columns"] = {
-            "total_columns": len(recent_sample.columns),
-            "numeric_columns": recent_sample.select_dtypes(
-                include=["number"]
-            ).columns.tolist(),
-            "datetime_columns": recent_sample.select_dtypes(
-                include=["datetime"]
-            ).columns.tolist(),
-            "object_columns": recent_sample.select_dtypes(
-                include=["object"]
-            ).columns.tolist(),
+        query_params = {
+            "select": select,
+            "where": where,
+            "order": order,
+            "limit": limit,
+            "offset": offset,
+            "q": q,
+            **{f"${key}": value for key, value in sodaql_params.items()} # Prepend $ to other params
         }
+        # Remove None params so sodapy uses its defaults or omits them
+        query_params = {k: v for k, v in query_params.items() if v is not None}
 
-        print(f"📊 Columns: {len(recent_sample.columns)} total")
-        print(f"   Numeric: {len(analysis['columns']['numeric_columns'])}")
-        print(f"   DateTime: {len(analysis['columns']['datetime_columns'])}")
-        print(f"   Text: {len(analysis['columns']['object_columns'])}")
+        try:
+            # print(f"Fetching data with sodapy: {query_params}")
+            results = self.client.get(self.dataset_id, **query_params)
+            if results:
+                df = pd.DataFrame.from_records(results)
+                if convert_types and not df.empty:
+                    df = self.convert_df_types(df)
+                return df
+            else:
+                return pd.DataFrame() # Return empty DataFrame if no results
+        except Exception as e:
+            print(f"❌ Error fetching data with sodapy: {e}")
+            return None
 
-        # Missing data analysis
-        missing_pct = (
-            recent_sample.isnull().sum() / len(recent_sample) * 100
-        ).round(1)
-        analysis["missing_data"] = missing_pct[missing_pct > 0].to_dict()
+    def fetch_batch_data(self,
+                       select: Optional[str] = None,
+                       where: Optional[str] = None,
+                       order: Optional[str] = None,
+                       q: Optional[str] = None,
+                       records_to_fetch: Optional[int] = None, # Max total records to fetch
+                       batch_size: int = 50_000, # Socrata's typical max limit per request
+                       convert_types: bool = True,
+                       save_batches: bool = False,
+                       output_dir: Optional[Path] = None,
+                       **sodaql_params: Any
+                       ) -> Optional[pd.DataFrame]:
+        """
+        Fetches all data matching the criteria, handling pagination.
 
-        if analysis["missing_data"]:
-            print("\n🔍 Columns with missing data:")
-            for col, pct in analysis["missing_data"].items():
-                print(f"   {col}: {pct}%")
+        Args:
+            select, where, order, q: SOQL clauses.
+            records_to_fetch: If set, stops after fetching this many records. Otherwise, fetches all.
+            batch_size: Number of records to fetch per API call (max usually 50000).
+            convert_types: Whether to convert types for the final DataFrame.
+            save_batches: If True, saves each fetched batch as a Parquet file.
+            output_dir: Directory to save batches (if save_batches is True).
+            **sodaql_params: Additional SODAQL parameters.
 
-        return analysis
+        Returns:
+            A pandas DataFrame with all fetched data, or None.
+        """
+        if save_batches:
+            if output_dir is None:
+                output_dir = Path("data_batches_sodapy")
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        all_records_list = []
+        current_offset = 0
+        records_retrieved_so_far = 0
+        
+        # Determine total records for progress bar if records_to_fetch is not set
+        # This requires an extra call to get a count, can be slow.
+        # For simplicity, if records_to_fetch is None, tqdm might not show an accurate total
+        # until the end, or we can try to get a count.
+        # Let's try to get a count for a better progress bar experience.
+        estimated_total = records_to_fetch
+        if estimated_total is None:
+            try:
+                count_query_params = {"select": "COUNT(*)"}
+                if where: count_query_params["where"] = where
+                if q: count_query_params["q"] = q
+                count_result = self.client.get(self.dataset_id, **count_query_params)
+                if count_result and isinstance(count_result, list) and count_result[0]:
+                    # The key for count can vary, often 'COUNT' or 'count_1', etc.
+                    # Assuming the first key in the first dict is the count.
+                    count_key = list(count_result[0].keys())[0]
+                    estimated_total = int(count_result[0][count_key])
+                    print(f"Estimated total records to fetch: {estimated_total}")
+            except Exception as e:
+                print(f"⚠️ Could not estimate total records for progress bar: {e}")
+                # Fallback: progress bar will update without a fixed total initially if records_to_fetch is None
+        
+        pbar_total = records_to_fetch if records_to_fetch is not None else estimated_total
+        with tqdm(total=pbar_total, desc="Fetching all data", unit="rec", disable=(pbar_total is None and records_to_fetch is None)) as pbar:
+            while True:
+                limit_for_this_batch = batch_size
+                if records_to_fetch is not None:
+                    remaining_to_fetch = records_to_fetch - records_retrieved_so_far
+                    if remaining_to_fetch <= 0:
+                        break
+                    limit_for_this_batch = min(batch_size, remaining_to_fetch)
+
+                batch_df = self.fetch_data(
+                    select=select, where=where, order=order, q=q,
+                    limit=limit_for_this_batch, offset=current_offset,
+                    convert_types=False, # Convert types once at the end for the combined DF
+                    **sodaql_params
+                )
+
+                if batch_df is None: # Error occurred
+                    print(f"❗ Halting batch fetch due to an error in retrieving a batch at offset {current_offset}.")
+                    break
+                
+                num_in_batch = len(batch_df)
+                if num_in_batch == 0: # No more records
+                    break
+
+                all_records_list.append(batch_df)
+                records_retrieved_so_far += num_in_batch
+                current_offset += num_in_batch
+                pbar.update(num_in_batch)
+
+                if save_batches and output_dir:
+                    batch_file = output_dir / f"batch_{len(all_records_list):04d}_offset_{current_offset-num_in_batch}.parquet"
+                    batch_df.to_parquet(batch_file, index=False)
+
+                if num_in_batch < limit_for_this_batch: # API returned fewer than requested, means end of data
+                    break
+                if records_to_fetch is not None and records_retrieved_so_far >= records_to_fetch:
+                    break
+            
+            if pbar_total is None and records_to_fetch is None: # If we didn't have a total initially
+                pbar.total = records_retrieved_so_far
+                pbar.refresh()
+
+
+        if not all_records_list:
+            print("No data fetched.")
+            return pd.DataFrame()
+
+        print("🔗 Combining all fetched batches...")
+        combined_df = pd.concat(all_records_list, ignore_index=True)
+
+        if convert_types and not combined_df.empty:
+            print("⚙️ Applying type conversions to combined data...")
+            combined_df = self.convert_df_types(combined_df)
+
+        print(f"✅ Total data fetched: {len(combined_df):,} records.")
+        # save raw data
+        raw_data_file = output_dir / "chicago_taxi_trips.parquet"
+        combined_df.to_parquet(raw_data_file, index=False)
+
+        return combined_df
+
+    def close(self):
+        """Closes the Socrata client session."""
+        if self.client:
+            self.client.close()
