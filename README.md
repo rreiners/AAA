@@ -1,9 +1,9 @@
 # Advanced Analytics and Application - SS 2025
 
 **Team Assignment: Smart Mobility Ride-Hailing Analysis**<br>
-**Student:** Robin Reiners
-**Student ID:** 7305271
-**Email:** rreiners@smail.uni-koeln.de
+**Student:** Saied Farham Nia
+**Student ID:** 7441573
+**Email:** sfarham1@smail.uni-koeln.de
 
 **Course:** Advanced Analytics and Application (AAA) - SS 2025
 **Institution:** University of Cologne, Faculty of Management, Economics, and Social Sciences, Department of Information Systems for Sustainable Society
@@ -112,8 +112,8 @@ This project is licensed under the terms of the [LICENSE](LICENSE) file. Please 
 
 ## 7. Contact
 
-Robin Reiners
-rreiners@smail.uni-koeln.de
+Saied Farham Nia
+sfarham1@smail.uni-koeln.de
 
 ---
 
